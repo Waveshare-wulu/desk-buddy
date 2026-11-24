@@ -1,0 +1,93 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  docs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 tools/check_docs.py
+
+  firmware:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    container: espressif/idf:v6.1
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/cache@v4
+        with:
+          path: managed_components
+          key: components-${{ hashFiles('dependencies.lock') }}
+      - uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-firmware-${{ github.sha }}
+          restore-keys: ccache-firmware-
+      - name: Build release firmware
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py -D DESK_BUDDY_DEVICE_SMOKE=OFF build
+      - name: Package firmware
+        run: |
+          . "$IDF_PATH/export.sh"
+          python tools/package_hub_release.py --version "ci-${GITHUB_SHA::7}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desk-buddy-firmware
+          path: release/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Build device regression firmware
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py -D DESK_BUDDY_DEVICE_SMOKE=ON build
+
+  unit-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    container: espressif/idf:v6.1
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 200M
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-tests-${{ github.sha }}
+          restore-keys: ccache-tests-
+      - name: Install QEMU
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends libgcrypt20 libglib2.0-0 libpixman-1-0 libsdl2-2.0-0 libslirp0
+          python3 "$IDF_PATH/tools/idf_tools.py" install qemu-xtensa
+      - name: Build test app
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py -C tests/esp_test_app build
+          cd tests/esp_test_app/build
+          python -m esptool --chip esp32s3 merge-bin --pad-to-size 4MB -o qemu_flash.bin @flash_args
+      - name: Run tests in QEMU
+        run: |
+          . "$IDF_PATH/export.sh"
+          python tests/run_qemu_tests.py --qemu qemu-system-xtensa --flash-bin tests/esp_test_app/build/qemu_flash.bin --timeout 120

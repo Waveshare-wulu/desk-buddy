@@ -1,0 +1,396 @@
+#include "services/display_service.hpp"
+
+#include <algorithm>
+#include <atomic>
+#include <cstring>
+#include <iterator>
+
+#include "bsp/esp-bsp.h"
+#include "bsp/touch.h"
+#include "esp_attr.h"
+#include "esp_check.h"
+#include "esp_heap_caps.h"
+#include "esp_lcd_co5300.h"
+#include "esp_lcd_panel_io.h"
+#include "esp_lcd_panel_ops.h"
+#include "esp_lv_adapter.h"
+#include "esp_memory_utils.h"
+#include "esp_log.h"
+
+namespace desk_buddy {
+
+namespace {
+
+constexpr const char *TAG = "DB:Display";
+constexpr int kDrawLines = 30;
+constexpr size_t kPixelBytes = BSP_LCD_BITS_PER_PIXEL / 8;
+constexpr size_t kDmaBytes = BSP_LCD_H_RES * kDrawLines * kPixelBytes;
+constexpr size_t kAnimationDmaBytes = 170 * 170 * kPixelBytes;
+constexpr size_t kFrameBytes = BSP_LCD_H_RES * BSP_LCD_V_RES * kPixelBytes;
+constexpr size_t kDmaAlignment = 64;
+// CO5300 datasheet section 6.4.1 requires a write clock period of at least 20 ns.
+constexpr int kPanelClockHz = 40 * 1000 * 1000;
+lv_draw_buf_t psram_buffer{};
+lv_draw_buf_t secondary_buffer{};
+
+struct TransferState {
+    esp_lcd_panel_io_handle_t io = nullptr;
+    esp_lcd_panel_handle_t panel = nullptr;
+    lv_display_t *display = nullptr;
+    lv_draw_buf_t *dma_buffer = nullptr;
+    void *staging[2]{};
+    void *animation_buffer = nullptr;
+    lv_area_t animation_area{0, 0, -1, -1};
+    std::atomic<int> pending_transfers{0};
+};
+
+TransferState transfer;
+
+#ifdef DESK_BUDDY_DEVICE_SMOKE
+unsigned panel_writes = 0;
+#endif
+
+void alignPanelArea(lv_area_t *area, void *)
+{
+    // Match the Waveshare BSP's CO5300 rounding to two-pixel boundaries.
+    area->x1 &= ~1;
+    area->y1 &= ~1;
+    area->x2 |= 1;
+    area->y2 |= 1;
+}
+
+// CO5300 register sequence from waveshare/esp32_s3_touch_amoled_2_16 (Apache-2.0).
+const co5300_lcd_init_cmd_t kPanelInitCommands[] = {
+    {0x11, "\x00", 0, 600},
+    {0xFE, "\x20", 1, 0},
+    {0x19, "\x10", 1, 0},
+    {0x1C, "\xA0", 1, 0},
+    {0xFE, "\x00", 1, 0},
+    {0xC4, "\x80", 1, 0},
+    {0x3A, "\x55", 1, 0},
+    {0x35, "\x00", 1, 0},
+    {0x53, "\x20", 1, 0},
+    {0x51, "\x00", 1, 0},
+    {0x63, "\xFF", 1, 0},
+    {0x2A, "\x00\x00\x01\xDF", 4, 0},
+    {0x2B, "\x00\x00\x01\xDF", 4, 0},
+    {0x36, "\xA0", 1, 0},
+};
+
+esp_err_t createPanel(esp_lcd_panel_handle_t &panel, esp_lcd_panel_io_handle_t &io)
+{
+    spi_bus_config_t bus{};
+    bus.data0_io_num = BSP_LCD_DATA0;
+    bus.data1_io_num = BSP_LCD_DATA1;
+    bus.sclk_io_num = BSP_LCD_PCLK;
+    bus.data2_io_num = BSP_LCD_DATA2;
+    bus.data3_io_num = BSP_LCD_DATA3;
+    bus.data4_io_num = -1;
+    bus.data5_io_num = -1;
+    bus.data6_io_num = -1;
+    bus.data7_io_num = -1;
+    bus.max_transfer_sz = kAnimationDmaBytes;
+    ESP_RETURN_ON_ERROR(spi_bus_initialize(BSP_LCD_SPI_NUM, &bus, SPI_DMA_CH_AUTO), TAG, "QSPI bus");
+
+    esp_lcd_panel_io_spi_config_t io_config{};
+    io_config.cs_gpio_num = BSP_LCD_CS;
+    io_config.dc_gpio_num = GPIO_NUM_NC;
+    io_config.pclk_hz = kPanelClockHz;
+    io_config.trans_queue_depth = 3;
+    io_config.lcd_cmd_bits = 32;
+    io_config.lcd_param_bits = 8;
+    io_config.flags.quad_mode = true;
+    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_spi(static_cast<esp_lcd_spi_bus_handle_t>(BSP_LCD_SPI_NUM),
+                                                 &io_config, &io), TAG, "panel IO");
+
+    co5300_vendor_config_t vendor{};
+    vendor.init_cmds = kPanelInitCommands;
+    vendor.init_cmds_size = std::size(kPanelInitCommands);
+    vendor.flags.use_qspi_interface = 1;
+    esp_lcd_panel_dev_config_t panel_config{};
+    panel_config.reset_gpio_num = BSP_LCD_RST;
+    panel_config.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB;
+    panel_config.bits_per_pixel = BSP_LCD_BITS_PER_PIXEL;
+    panel_config.vendor_config = &vendor;
+    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_co5300(io, &panel_config, &panel), TAG, "CO5300 panel");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(panel), TAG, "panel reset");
+    return esp_lcd_panel_init(panel);
+}
+
+esp_err_t waitForQueuedPanelTransfers(esp_lcd_panel_io_handle_t io)
+{
+    // ESP-IDF drains queued color transfers even when command -1 skips command transmission.
+    return esp_lcd_panel_io_tx_param(io, -1, nullptr, 0);
+}
+
+bool installPsramBuffer(lv_display_t *display)
+{
+    auto *memory = heap_caps_aligned_alloc(kDmaAlignment, kFrameBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!memory) {
+        return false;
+    }
+
+    if (lv_draw_buf_init(&psram_buffer, BSP_LCD_H_RES, BSP_LCD_V_RES, LV_COLOR_FORMAT_RGB565,
+                         LV_STRIDE_AUTO, memory, kFrameBytes) != LV_RESULT_OK) {
+        heap_caps_free(memory);
+        psram_buffer = {};
+        return false;
+    }
+
+    lv_display_set_draw_buffers(display, &psram_buffer, nullptr);
+    return true;
+}
+
+bool allocateSecondDmaBuffer()
+{
+    if (secondary_buffer.data) {
+        return true;
+    }
+    auto *memory = heap_caps_aligned_alloc(kDmaAlignment, kDmaBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    if (!memory) {
+        return false;
+    }
+    if (lv_draw_buf_init(&secondary_buffer, BSP_LCD_H_RES, kDrawLines, LV_COLOR_FORMAT_RGB565,
+                         LV_STRIDE_AUTO, memory, kDmaBytes) != LV_RESULT_OK) {
+        heap_caps_free(memory);
+        secondary_buffer = {};
+        return false;
+    }
+    return true;
+}
+
+bool enableSecondDmaBuffer(lv_display_t *display)
+{
+    if (!allocateSecondDmaBuffer()) {
+        return false;
+    }
+    lv_display_set_draw_buffers(display, transfer.dma_buffer, &secondary_buffer);
+    return true;
+}
+
+bool IRAM_ATTR onColorTransferDone(esp_lcd_panel_io_handle_t, esp_lcd_panel_io_event_data_t *, void *context)
+{
+    auto &state = *static_cast<TransferState *>(context);
+    return state.pending_transfers.fetch_sub(1, std::memory_order_acq_rel) == 1 &&
+           esp_lv_adapter_display_notify_color_trans_done_from_isr(state.display);
+}
+
+esp_err_t writePanelRegion(esp_lcd_panel_handle_t panel, int x1, int y1, int x2, int y2, const void *pixels)
+{
+#ifdef DESK_BUDDY_DEVICE_SMOKE
+    ++panel_writes;
+#endif
+    return esp_lcd_panel_draw_bitmap(panel, x1, y1, x2, y2, pixels);
+}
+
+esp_err_t writeTrackedRegion(TransferState &state, esp_lcd_panel_handle_t panel, int transfers,
+                             int x1, int y1, int x2, int y2, const void *pixels)
+{
+    state.pending_transfers.store(transfers, std::memory_order_release);
+    const auto result = writePanelRegion(panel, x1, y1, x2, y2, pixels);
+    if (result != ESP_OK) {
+        state.pending_transfers.store(0, std::memory_order_release);
+    }
+    return result;
+}
+
+esp_err_t drawStagedRegion(lv_display_t *, esp_lcd_panel_handle_t panel, int x1, int y1, int x2, int y2,
+                          const void *pixels, void *context)
+{
+    auto &state = *static_cast<TransferState *>(context);
+    if (!esp_ptr_external_ram(pixels)) {
+        return writeTrackedRegion(state, panel, 1, x1, y1, x2, y2, pixels);
+    }
+    if (x2 <= x1 || x2 - x1 > BSP_LCD_H_RES || y2 <= y1) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const size_t row_bytes = (x2 - x1) * kPixelBytes;
+    const auto &region = state.animation_area;
+    if (state.animation_buffer && x1 >= region.x1 && x2 - 1 <= region.x2 &&
+        y1 >= region.y1 && y2 - 1 <= region.y2) {
+        std::memcpy(state.animation_buffer, pixels, row_bytes * (y2 - y1));
+        return writeTrackedRegion(state, panel, 1, x1, y1, x2, y2, state.animation_buffer);
+    }
+
+    // The CO5300 window commands are polling SPI transfers, and esp_lcd drains every queued color
+    // transfer before sending them. Writing slice N therefore retires slice N-1, so the staging
+    // buffer filled next is never still in flight.
+    const int rows_per_slice = static_cast<int>(kDmaBytes / row_bytes) & ~1;
+    const int slices = (y2 - y1 + rows_per_slice - 1) / rows_per_slice;
+    state.pending_transfers.store(slices, std::memory_order_release);
+    const auto *source = static_cast<const uint8_t *>(pixels);
+    for (int slice = 0, y = y1; y < y2; ++slice) {
+        const int end = std::min(y + rows_per_slice, y2);
+        const size_t bytes = (end - y) * row_bytes;
+        auto *staging = state.staging[slice & 1];
+        std::memcpy(staging, source, bytes);
+        const auto result = writePanelRegion(panel, x1, y, x2, end, staging);
+        if (result != ESP_OK) {
+            state.pending_transfers.store(0, std::memory_order_release);
+            return result;
+        }
+        source += bytes;
+        y = end;
+    }
+    return ESP_OK;
+}
+
+}
+
+namespace {
+esp_err_t writeDisplayBrightness(uint8_t percent)
+{
+    constexpr int kQspiWriteBrightness = 0x02 << 24 | 0x51 << 8;
+    const uint8_t level = std::min<uint8_t>(percent, 100) * 255 / 100;
+    return transfer.io ? esp_lcd_panel_io_tx_param(transfer.io, kQspiWriteBrightness, &level, 1)
+                       : ESP_ERR_INVALID_STATE;
+}
+}
+
+void setDisplayBrightness(uint8_t percent)
+{
+    if (writeDisplayBrightness(percent) != ESP_OK) {
+        ESP_LOGW(TAG, "Unable to set panel brightness to %u%%", percent);
+    }
+}
+
+esp_err_t setDisplayPower(bool on)
+{
+    ESP_RETURN_ON_FALSE(transfer.panel && transfer.io, ESP_ERR_INVALID_STATE, TAG, "missing panel");
+    if (on) {
+        ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_sleep(transfer.panel, false), TAG, "CO5300 Sleep Out");
+        return esp_lcd_panel_disp_on_off(transfer.panel, true);
+    }
+    ESP_RETURN_ON_ERROR(waitForQueuedPanelTransfers(transfer.io), TAG, "pending pixel transfers");
+    ESP_RETURN_ON_ERROR(writeDisplayBrightness(0), TAG, "CO5300 brightness");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_on_off(transfer.panel, false), TAG, "CO5300 display off");
+    return esp_lcd_panel_disp_sleep(transfer.panel, true);
+}
+
+void setDisplayAnimationRegion(const lv_area_t *area)
+{
+    if (transfer.animation_buffer) {
+        transfer.animation_area = {0, 0, -1, -1};
+        const auto result = waitForQueuedPanelTransfers(transfer.io);
+        if (result != ESP_OK) {
+            ESP_LOGW(TAG, "Unable to release animation DMA buffer: %s", esp_err_to_name(result));
+            return;
+        }
+        heap_caps_free(transfer.animation_buffer);
+        transfer.animation_buffer = nullptr;
+    }
+    if (!area || !transfer.display || !esp_ptr_external_ram(lv_display_get_buf_active(transfer.display)->data)) {
+        return;
+    }
+
+    lv_area_t region = *area;
+    alignPanelArea(&region, nullptr);
+    const auto bytes = static_cast<size_t>(lv_area_get_size(&region)) * kPixelBytes;
+    if (bytes == 0 || bytes > kAnimationDmaBytes) {
+        return;
+    }
+
+    transfer.animation_buffer = heap_caps_aligned_alloc(kDmaAlignment, bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    if (!transfer.animation_buffer) {
+        ESP_LOGW(TAG, "Unable to reserve %zu bytes for contiguous animation transfers", bytes);
+        return;
+    }
+    transfer.animation_area = region;
+}
+
+lv_display_t *startDisplay(lv_indev_t *&touch_input)
+{
+    esp_lv_adapter_config_t adapter = ESP_LV_ADAPTER_DEFAULT_CONFIG();
+    adapter.task_stack_size = 12 * 1024;
+    if (esp_lv_adapter_init(&adapter) != ESP_OK) {
+        return nullptr;
+    }
+
+    esp_lcd_panel_handle_t panel = nullptr;
+    esp_lcd_panel_io_handle_t io = nullptr;
+    if (createPanel(panel, io) != ESP_OK) {
+        return nullptr;
+    }
+    if (esp_lv_adapter_set_default_display_idf_callback_registration_enabled(false) != ESP_OK) {
+        return nullptr;
+    }
+
+    esp_lv_adapter_display_config_t profile = ESP_LV_ADAPTER_DISPLAY_SPI_WITHOUT_PSRAM_DEFAULT_CONFIG(
+        panel, io, BSP_LCD_H_RES, BSP_LCD_V_RES, ESP_LV_ADAPTER_ROTATE_0);
+    profile.profile.buffer_height = kDrawLines;
+    profile.profile.require_double_buffer = false;
+    auto *display = esp_lv_adapter_register_display(&profile);
+    auto *buffer = display ? lv_display_get_buf_active(display) : nullptr;
+    if (!buffer || !esp_ptr_dma_capable(buffer->data)) {
+        ESP_LOGE(TAG, "Unable to allocate the internal DMA buffer");
+        return nullptr;
+    }
+    if (esp_lv_adapter_set_area_rounder_cb(display, alignPanelArea, nullptr) != ESP_OK) {
+        return nullptr;
+    }
+
+    transfer.io = io;
+    transfer.panel = panel;
+    transfer.display = display;
+    transfer.dma_buffer = buffer;
+    const esp_lcd_panel_io_callbacks_t io_callbacks{.on_color_trans_done = onColorTransferDone};
+    const esp_lv_adapter_draw_bitmap_callbacks_t draw_callbacks{.custom_draw_bitmap = drawStagedRegion};
+    if (esp_lcd_panel_io_register_event_callbacks(io, &io_callbacks, &transfer) != ESP_OK ||
+        esp_lv_adapter_set_draw_bitmap_callbacks(display, &draw_callbacks, &transfer) != ESP_OK) {
+        return nullptr;
+    }
+
+    const bool use_psram = allocateSecondDmaBuffer() && installPsramBuffer(display);
+    const bool fallback_double_buffered = !use_psram && enableSecondDmaBuffer(display);
+    transfer.staging[0] = buffer->data;
+    transfer.staging[1] = secondary_buffer.data;
+
+    bsp_display_cfg_t touch_config{};
+    touch_config.touch_flags.swap_xy = true;
+    touch_config.touch_flags.mirror_y = true;
+    esp_lcd_touch_handle_t touch = nullptr;
+    if (bsp_touch_new(&touch_config, &touch) != ESP_OK) {
+        return nullptr;
+    }
+    const esp_lv_adapter_touch_config_t input = ESP_LV_ADAPTER_TOUCH_DEFAULT_CONFIG(display, touch);
+    touch_input = esp_lv_adapter_register_touch(&input);
+    if (!touch_input || esp_lv_adapter_start() != ESP_OK) {
+        return nullptr;
+    }
+    if (use_psram) {
+        ESP_LOGI(TAG, "AMOLED ready at %d MHz QSPI with a %zu-byte PSRAM draw buffer and two SRAM staging buffers (%d lines)",
+                 kPanelClockHz / 1000000, kFrameBytes, kDrawLines);
+    } else {
+        ESP_LOGW(TAG, "PSRAM draw buffer unavailable; AMOLED ready with %d internal DMA buffers (%d lines)",
+                 fallback_double_buffered ? 2 : 1, kDrawLines);
+    }
+    return display;
+}
+
+#ifdef DESK_BUDDY_DEVICE_SMOKE
+unsigned displayBenchmarkPanelWrites()
+{
+    return panel_writes;
+}
+
+bool waitForDisplayBenchmarkTransfer()
+{
+    return waitForQueuedPanelTransfers(transfer.io) == ESP_OK;
+}
+
+bool setDisplayBenchmarkBuffer(lv_display_t *display, bool use_psram)
+{
+    if (!waitForDisplayBenchmarkTransfer() || (use_psram && !psram_buffer.data)) {
+        return false;
+    }
+    if (!use_psram) {
+        return enableSecondDmaBuffer(display);
+    }
+
+    lv_display_set_draw_buffers(display, &psram_buffer, nullptr);
+    return true;
+}
+#endif
+
+}

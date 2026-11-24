@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>摸鱼搭子配网</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0 auto; max-width: 440px; padding: 24px 18px; background: #faf6ee;
+    color: #3a302a; font: 16px/1.5 system-ui, sans-serif; }
+  h1 { font-size: 24px; margin: 0 0 16px; }
+  h2 { margin: 0 0 8px; font-size: 18px; }
+  section, form { background: white; border: 1px solid #ece2d2; border-radius: 18px;
+    padding: 16px; margin: 0 0 12px; }
+  label { display: block; margin: 12px 0 4px; }
+  input, select, button { width: 100%; min-height: 44px; font: inherit; border-radius: 10px; }
+  input, select { border: 1px solid #ddd3c5; background: #faf6ee; padding: 8px; color: inherit; }
+  button { background: #177e65; color: white; border: 0; font-weight: bold; padding: 9px; }
+  form button { margin-top: 16px; background: #1d6ec0; }
+  button:disabled { opacity: .55; }
+  p { margin: 0 0 8px; }
+  #status { color: #177e65; font-weight: bold; }
+  #status.error { color: #aa3043; }
+</style>
+<h1>摸鱼搭子配网</h1>
+<section>
+  <h2>直接校时</h2>
+  <p>手机时间将按 UTC+8 写入板载时钟。</p>
+  <button type="button" id="sync">同步手机时间</button>
+</section>
+<form id="wifi">
+  <h2>连接 2.4 GHz Wi-Fi</h2>
+  <p>连接成功后设备会保存网络，并尝试自动校时。</p>
+  <label for="nearby">附近 Wi-Fi</label>
+  <select id="nearby"><option value="">手动填写热点名称</option></select>
+  <label for="ssid">热点名称</label>
+  <input id="ssid" type="text" required maxlength="32" autocapitalize="off" autocorrect="off" spellcheck="false">
+  <label for="password">密码（开放网络留空）</label>
+  <input id="password" type="password" maxlength="64" autocomplete="off">
+  <button type="submit">连接并校时</button>
+</form>
+<p id="status" role="status"></p>
+<noscript>此页面需要启用 JavaScript。也可以在设备上选择手动输入或离线校时。</noscript>
+<script>
+  const ssid = document.querySelector('#ssid');
+  const password = document.querySelector('#password');
+  const nearby = document.querySelector('#nearby');
+  const status = document.querySelector('#status');
+  const buttons = [...document.querySelectorAll('button')];
+
+  function show(message, error = false) {
+    status.textContent = message;
+    status.classList.toggle('error', error);
+  }
+
+  async function send(path, body, success, failure) {
+    buttons.forEach(button => { button.disabled = true; });
+    show('正在提交…');
+    try {
+      const response = await fetch(path, {method: 'POST', headers: {'X-DeskBuddy': '1'}, body});
+      if (!response.ok) throw new Error();
+      password.value = '';
+      show(success);
+    } catch {
+      show(failure, true);
+      buttons.forEach(button => { button.disabled = false; });
+    }
+  }
+
+  document.querySelector('#sync').onclick = () => send('/api/sync_time',
+    String(Math.floor(Date.now() / 1000)), '已写入板载时钟，设备即将关闭热点。',
+    '校时失败，请检查手机时间和设备状态后重试。');
+
+  document.querySelector('#wifi').onsubmit = event => {
+    event.preventDefault();
+    const encode = new TextEncoder();
+    const nameBytes = encode.encode(ssid.value);
+    const passBytes = encode.encode(password.value);
+    if (!nameBytes.length || nameBytes.length > 32) {
+      show('请输入 1 至 32 字节的热点名称。', true);
+      return;
+    }
+    const validPassword = /^[ -~]{8,63}$/.test(password.value) || /^[0-9a-f]{64}$/i.test(password.value);
+    if (password.value && !validPassword) {
+      show('密码需要 8 至 63 个可打印 ASCII 字符，或 64 位十六进制密钥。', true);
+      return;
+    }
+    const body = new Uint8Array(1 + nameBytes.length + passBytes.length);
+    body[0] = nameBytes.length;
+    body.set(nameBytes, 1);
+    body.set(passBytes, 1 + nameBytes.length);
+    send('/api/wifi', body, '已提交。热点即将关闭，请在设备上查看连接和校时结果。',
+      '提交失败，请确认手机仍连接设备热点后重试。');
+  };
+
+  nearby.onchange = () => {
+    if (nearby.value) ssid.value = nearby.value;
+  };
+  fetch('/api/networks').then(response => response.json()).then(networks => {
+    for (const ap of networks) {
+      nearby.add(new Option(ap.ssid + (ap.secured ? '（加密）' : '（开放）'), ap.ssid));
+    }
+  }).catch(() => {});
+</script>
+</html>

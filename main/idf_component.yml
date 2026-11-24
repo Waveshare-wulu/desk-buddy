@@ -1,0 +1,18 @@
+dependencies:
+  idf: ">=6.0.0"
+  espressif/brookesia_system_core:
+    version: "0.8.7"
+  espressif/brookesia_hal_interface:
+    version: "0.8.4"
+  espressif/brookesia_service_device:
+    version: "0.8.3"
+  espressif/esp_lcd_co5300:
+    version: "2.2.0"
+  espressif/esp_lvgl_adapter:
+    version: "0.6.4"
+  joltwallet/littlefs:
+    version: "1.23.1"
+  waveshare/esp32_s3_touch_amoled_2_16:
+    version: "^2.0.1"
+  waveshare/qmi8658:
+    version: "*"

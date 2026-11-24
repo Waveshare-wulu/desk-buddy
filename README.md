@@ -1,6 +1,6 @@
 # 摸鱼搭子 Desk Buddy
 
-运行在 Waveshare ESP32-S3-Touch-AMOLED-2.16 上的桌面小玩具固件。开机即用，日常离线运行。
+运行在 [Waveshare ESP32-S3-Touch-AMOLED-2.16](https://www.waveshare.net/shop/ESP32-S3-Touch-AMOLED-2.16.htm) 上的桌面小玩具固件。开机即用，日常离线运行。
 
 <p align="center">
   <a href="docs/assets/desk-buddy-cover.webp"><img src="docs/assets/desk-buddy-cover.webp" width="760" alt="摸鱼搭子界面，从左到右为主屏、负一屏、电子木鱼和随机实验室" /></a>
@@ -22,13 +22,16 @@
 
 ## 烧录
 
-固件只支持 Waveshare ESP32-S3-Touch-AMOLED-2.16。从 [Releases](https://github.com/Waveshare-wulu/desk-buddy/releases) 下载后，用 [Waveshare Hub](https://hub.waveshare.net/) 网页烧录，或运行：
+固件只支持 Waveshare ESP32-S3-Touch-AMOLED-2.16，提供两种烧录方式：
+
+1. **网页一键烧录**：打开 [Waveshare Hub](https://hub.waveshare.net/projects/WS-G6EE99MA)，连接开发板后直接在线烧录。
+2. **本地命令烧录**：从 [Releases](https://github.com/Waveshare-wulu/desk-buddy/releases) 下载合并镜像并运行：
 
 ```sh
 python -m esptool --chip esp32s3 --port <串口> write-flash 0x0 desk-buddy-<版本>-esp32-s3-touch-amoled-2.16-merged.bin
 ```
 
-合并镜像会清除设置和存档。升级时要保留数据，按发布包中 `manifest.json` 的地址分段烧录，不要擦除 Flash。
+合并镜像会清除设置和存档。升级时要保留数据，下载分段包并按 `manifest.json` 的地址分段烧录，不要擦除 Flash。
 
 ## 构建
 

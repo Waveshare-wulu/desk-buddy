@@ -807,8 +807,12 @@ void WifiTimeService::provision(const Job &job)
     WifiConfig router{};
     WifiTimeStatus networks;
     Radio radio;
-    if (isCurrent(job.ticket) && radio.start(_hotspot)) {
+    if (isCurrent(job.ticket) && radio.start() && isCurrent(job.ticket)) {
         scanNetworks(networks);
+    }
+    radio.stop();
+
+    if (isCurrent(job.ticket) && radio.start(_hotspot)) {
         {
             Portal portal(*this, job.ticket, networks);
             if (isCurrent(job.ticket) && portal.start()) {

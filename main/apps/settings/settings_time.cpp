@@ -523,7 +523,7 @@ void SettingsApp::buildQrPage(lv_obj_t *parent)
     lv_obj_set_style_pad_ver(card, 12, 0);
     _portal_status = createBadge(card, "", kAccentMintSoft, kAccentMintFg);
     lv_obj_align(_portal_status, LV_ALIGN_TOP_LEFT, 0, 0);
-    auto *ip = labelAt(card, "192.168.4.1", 0, 0, fontSm(), kTextSecondary);
+    auto *ip = labelAt(card, "http://192.168.4.1", 0, 0, fontSm(), kTextSecondary);
     lv_obj_align(ip, LV_ALIGN_TOP_RIGHT, 0, 4);
 
     auto *frame = createCard(card, 168, 168, 16);

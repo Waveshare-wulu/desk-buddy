@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include "db_fortune_engine.hpp"
 #include "db_time_logic.hpp"
@@ -9,6 +10,7 @@
 #include "services/clock_service.hpp"
 #include "services/sound_service.hpp"
 #include "services/storage_service.hpp"
+#include "services/wifi_time_service.hpp"
 #include "ui/assets/db_woodfish_art.h"
 #include "ui/theme/db_theme.hpp"
 
@@ -152,7 +154,7 @@ void HomeHeader::buildMinusOneScreen(lv_obj_t *page0_main_obj)
     lv_obj_set_pos(off_card, 16, 166);
     lv_obj_set_style_pad_hor(off_card, 18, 0);
     lv_obj_set_style_pad_ver(off_card, 12, 0);
-    makeCardInteractive(off_card, onTouchPressed, onOffworkCardClicked, this);
+    makeCardInteractive(off_card, onTouchPressed, onTimeCardClicked, this);
 
     _m1_off_title_lbl = lv_label_create(off_card);
     lv_label_set_text(_m1_off_title_lbl, "下班自由进度");
@@ -244,8 +246,9 @@ void HomeHeader::buildMainPageMotto(lv_obj_t *page1_main_obj)
     lv_obj_set_style_text_align(_motto_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_font(_motto_label, theme::fontSm(), 0);
     lv_obj_set_style_text_color(_motto_label, theme::color(theme::kTextMuted), 0);
-    lv_obj_align(_motto_label, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_align(_motto_label, LV_ALIGN_BOTTOM_MID, 0, -14);
     lv_obj_add_flag(_motto_label, LV_OBJ_FLAG_CLICKABLE);
+    theme::expandTouchHeight(_motto_label, lv_font_get_line_height(theme::fontSm()));
     lv_obj_add_flag(_motto_label, LV_OBJ_FLAG_EVENT_BUBBLE);
     lv_obj_add_event_cb(_motto_label, onTouchPressed, LV_EVENT_PRESSED, this);
     lv_obj_add_event_cb(_motto_label, onMottoClicked, LV_EVENT_CLICKED, this);
@@ -256,6 +259,20 @@ void HomeHeader::refreshClockAndStats()
     const DateTime dt = ClockService::instance().getNow();
     const auto &cfg = StorageService::instance().getSettings();
     _time_valid = dt.valid;
+    const auto wifi_state = dt.valid ? WifiSyncState::IDLE : WifiTimeService::instance().status().state;
+    const bool time_syncing = wifi_state == WifiSyncState::CONNECTING || wifi_state == WifiSyncState::SYNCING_SNTP;
+    const auto calibration_color = time_syncing ? theme::kAccentCyanFg : theme::kAccentAmberFg;
+
+    if (_motto_label) {
+        const char *text = _motto_text;
+        if (!dt.valid) {
+            text = time_syncing ? "正在自动校时…" : "时间未校准 · 轻点去校时 ›";
+        }
+        if (std::strcmp(lv_label_get_text(_motto_label), text) != 0) {
+            lv_label_set_text(_motto_label, text);
+            lv_obj_set_style_text_color(_motto_label, theme::color(dt.valid ? theme::kTextMuted : calibration_color), 0);
+        }
+    }
 
     char buf[80];
     if (_m1_time_lbl) {
@@ -288,8 +305,8 @@ void HomeHeader::refreshClockAndStats()
 
     if (_m1_clock_sub_lbl) {
         if (!ow.time_valid) {
-            lv_label_set_text(_m1_clock_sub_lbl, "请前往设置校时");
-            lv_obj_set_style_text_color(_m1_clock_sub_lbl, theme::color(theme::kAccentAmberFg), 0);
+            lv_label_set_text(_m1_clock_sub_lbl, time_syncing ? "正在自动校时…" : "轻点去校时 ›");
+            lv_obj_set_style_text_color(_m1_clock_sub_lbl, theme::color(calibration_color), 0);
         } else if (ow.phase == WorkDayPhase::INVALID) {
             lv_label_set_text(_m1_clock_sub_lbl, "请调整上下班时间");
             lv_obj_set_style_text_color(_m1_clock_sub_lbl, theme::color(theme::kAccentCoralFg), 0);
@@ -308,10 +325,12 @@ void HomeHeader::refreshClockAndStats()
     }
 
     if (_m1_off_title_lbl && _m1_off_right_lbl && _m1_off_bar) {
+        lv_obj_set_style_text_color(_m1_off_right_lbl,
+            theme::color(ow.time_valid ? theme::kTextPrimary : theme::kAccentAmberFg), 0);
         if (!ow.time_valid) {
             lv_label_set_text(_m1_off_title_lbl, "下班倒计时 · 待校准时间");
             lv_obj_set_style_text_color(_m1_off_title_lbl, theme::color(theme::kAccentAmberFg), 0);
-            lv_label_set_text(_m1_off_right_lbl, "去设置");
+            lv_label_set_text(_m1_off_right_lbl, "去校时 ›");
         } else if (ow.phase == WorkDayPhase::INVALID) {
             lv_label_set_text(_m1_off_title_lbl, "请调整上下班时间");
             lv_obj_set_style_text_color(_m1_off_title_lbl, theme::color(theme::kAccentCoralFg), 0);
@@ -366,8 +385,8 @@ void HomeHeader::refreshDailyContent()
 void HomeHeader::nextMotto()
 {
     if (!_motto_label) return;
-    const char *motto = _rng.pickMotto(&_last_motto_idx);
-    lv_label_set_text(_motto_label, motto);
+    _motto_text = _rng.pickMotto(&_last_motto_idx);
+    lv_label_set_text(_motto_label, _motto_text);
 }
 
 void HomeHeader::nextFood()
@@ -400,20 +419,9 @@ void HomeHeader::onTimeCardClicked(lv_event_t *e)
     auto *self = static_cast<HomeHeader *>(lv_event_get_user_data(e));
     if (!self || !self->acceptTap()) return;
     SoundService::instance().play(SoundEffect::CLICK);
-    if (self->_cbs.open_time) {
-        self->_cbs.open_time();
-    }
-}
-
-void HomeHeader::onOffworkCardClicked(lv_event_t *e)
-{
-    auto *self = static_cast<HomeHeader *>(lv_event_get_user_data(e));
-    if (!self || !self->acceptTap()) return;
-    SoundService::instance().play(SoundEffect::CLICK);
-    if (!self->_time_valid && self->_cbs.open_settings) {
-        self->_cbs.open_settings();
-    } else if (self->_cbs.open_time) {
-        self->_cbs.open_time();
+    const auto &open = self->_time_valid ? self->_cbs.open_time : self->_cbs.open_time_calibration;
+    if (open) {
+        open();
     }
 }
 
@@ -458,7 +466,11 @@ void HomeHeader::onMottoClicked(lv_event_t *e)
     auto *self = static_cast<HomeHeader *>(lv_event_get_user_data(e));
     if (!self || !self->acceptTap()) return;
     SoundService::instance().play(SoundEffect::CLICK);
-    self->nextMotto();
+    if (self->_time_valid) {
+        self->nextMotto();
+    } else if (self->_cbs.open_time_calibration) {
+        self->_cbs.open_time_calibration();
+    }
 }
 
 }

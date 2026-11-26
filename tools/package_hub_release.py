@@ -30,7 +30,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", default="build", help="ESP-IDF build directory")
     parser.add_argument("--out-dir", default="release", help="Output release directory")
-    parser.add_argument("--version", default="v1.0.0", help="Firmware version tag")
+    parser.add_argument("--version", default="v1.0.1", help="Firmware version tag")
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parent.parent

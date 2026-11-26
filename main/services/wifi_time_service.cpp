@@ -32,6 +32,7 @@ constexpr char kStartError[] = "Wi-Fi 启动失败，请重试";
 constexpr char kRtcError[] = "板载时钟写入失败，请重试";
 constexpr char kSaveError[] = "配置保存失败，请重试";
 constexpr int64_t kPortalIdleUs = 5 * 60 * 1000000LL;
+constexpr uint32_t kWifiWorkerStackBytes = 6656;
 constexpr int64_t kStationTimeoutUs = 15 * 1000000LL;
 constexpr int64_t kSntpTimeoutUs = 10 * 1000000LL;
 
@@ -194,30 +195,47 @@ bool scanNetworks(WifiTimeStatus &result)
         esp_wifi_clear_ap_list();
         return false;
     }
+    auto &access_points = result.access_points;
+    const auto weakerSignal = [](const WifiAccessPoint &left, const WifiAccessPoint &right) {
+        return left.rssi < right.rssi;
+    };
     bool complete = true;
-    for (uint16_t i = 0; i < count && result.access_point_count < result.access_points.size(); ++i) {
+    for (uint16_t i = 0; i < count; ++i) {
         wifi_ap_record_t record{};
         if (!reportError(esp_wifi_scan_get_ap_record(&record), "esp_wifi_scan_get_ap_record")) {
             complete = false;
             break;
         }
         const auto *ssid = reinterpret_cast<const char *>(record.ssid);
-        const bool secured = record.authmode != WIFI_AUTH_OPEN;
         if (!ssid[0] || record.authmode == WIFI_AUTH_WEP) {
             continue;
         }
-        const auto end = result.access_points.begin() + result.access_point_count;
-        const bool duplicate = std::any_of(result.access_points.begin(), end, [=](const auto &ap) {
+
+        const auto end = access_points.begin() + result.access_point_count;
+        auto entry = std::find_if(access_points.begin(), end, [ssid](const WifiAccessPoint &ap) {
             return std::strncmp(ap.ssid, ssid, 32) == 0;
         });
-        if (!duplicate) {
-            auto &ap = result.access_points[result.access_point_count++];
-            std::memcpy(ap.ssid, ssid, 32);
-            ap.rssi = record.rssi;
-            ap.secured = secured;
+        if (entry == end && end != access_points.end()) {
+            ++result.access_point_count;
+        } else {
+            if (entry == end) {
+                entry = std::min_element(access_points.begin(), end, weakerSignal);
+            }
+            if (record.rssi <= entry->rssi) {
+                continue;
+            }
         }
+
+        std::memcpy(entry->ssid, ssid, 32);
+        entry->rssi = record.rssi;
+        entry->secured = record.authmode != WIFI_AUTH_OPEN;
     }
     esp_wifi_clear_ap_list();
+
+    std::sort(access_points.begin(), access_points.begin() + result.access_point_count,
+              [](const WifiAccessPoint &left, const WifiAccessPoint &right) {
+                  return left.rssi > right.rssi;
+              });
     return complete;
 }
 
@@ -551,7 +569,7 @@ bool WifiTimeService::submitLocked(Operation op, const WifiConfig &config, bool 
         _worker_running = xTaskCreate([](void *arg) {
             static_cast<WifiTimeService *>(arg)->runWorker();
             vTaskDelete(nullptr);
-        }, "db_wifi_time", 4608, this, 4, nullptr) == pdPASS;
+        }, "db_wifi_time", kWifiWorkerStackBytes, this, 4, nullptr) == pdPASS;
         if (!_worker_running) {
             _pending = {};
             _status.state = WifiSyncState::FAILED;
@@ -789,8 +807,12 @@ void WifiTimeService::provision(const Job &job)
     WifiConfig router{};
     WifiTimeStatus networks;
     Radio radio;
-    if (isCurrent(job.ticket) && radio.start(_hotspot)) {
+    if (isCurrent(job.ticket) && radio.start() && isCurrent(job.ticket)) {
         scanNetworks(networks);
+    }
+    radio.stop();
+
+    if (isCurrent(job.ticket) && radio.start(_hotspot)) {
         {
             Portal portal(*this, job.ticket, networks);
             if (isCurrent(job.ticket) && portal.start()) {

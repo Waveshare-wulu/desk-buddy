@@ -12,7 +12,7 @@ public:
     struct Callbacks {
         std::function<void()> open_time;
         std::function<void()> open_fortune;
-        std::function<void()> open_settings;
+        std::function<void()> open_time_calibration;
     };
 
     void create(lv_obj_t *dashboard, lv_obj_t *home, Callbacks cbs);
@@ -28,7 +28,6 @@ private:
 
     static void onTouchPressed(lv_event_t *e);
     static void onTimeCardClicked(lv_event_t *e);
-    static void onOffworkCardClicked(lv_event_t *e);
     static void onFishCardClicked(lv_event_t *e);
     static void onFortuneCardClicked(lv_event_t *e);
     static void onFoodCardClicked(lv_event_t *e);
@@ -57,6 +56,7 @@ private:
     lv_obj_t *_m1_food_name_lbl = nullptr;
 
     lv_obj_t *_motto_label = nullptr;
+    const char *_motto_text = "";
 };
 
 }

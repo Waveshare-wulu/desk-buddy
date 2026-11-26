@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <utility>
 
+#include "services/sound_service.hpp"
 #include "ui/assets/db_ui_icons.h"
 #include "ui/theme/db_theme.hpp"
 
@@ -18,6 +19,9 @@ constexpr const char *kCompactPositions[] = {"左键", "中键", "右键"};
 constexpr int kGuideHighlightMs = 1400;
 constexpr int kConfirmationMs = 3000;
 constexpr int kToastMs = 1500;
+constexpr int kOnboardingConfirmHeight = 68;
+constexpr int kOnboardingConfirmY = 372;
+constexpr int kOnboardingConfirmExtClickPad = 28;
 constexpr lv_opa_t kMenuScrimOpacity = 112;
 
 struct ButtonStyle {
@@ -340,10 +344,13 @@ void PowerOverlay::showOnboarding()
     lv_obj_align(makeLabel(_root, "按一下顶部按键试试", fontSm(), kTextSecondary), LV_ALIGN_TOP_MID, 0, 83);
     _guide.build(_root, true);
 
-    auto *confirm = createPillButton(_root, "知道了，开始使用", kAccentMint, kTextOnAccent, 444, 58, fontMd());
-    lv_obj_set_style_radius(confirm, 20, 0);
-    lv_obj_align(confirm, LV_ALIGN_TOP_MID, 0, 368);
+    auto *confirm = createPillButton(_root, "知道了，开始使用", kAccentMint, kTextOnAccent,
+                                     kContentWidth, kOnboardingConfirmHeight, fontMd());
+    lv_obj_set_style_radius(confirm, 22, 0);
+    lv_obj_set_ext_click_area(confirm, kOnboardingConfirmExtClickPad);
+    lv_obj_align(confirm, LV_ALIGN_TOP_MID, 0, kOnboardingConfirmY);
     lv_obj_add_event_cb(confirm, [](lv_event_t *event) {
+        SoundService::instance().play(SoundEffect::CLICK);
         auto &self = *static_cast<PowerOverlay *>(lv_event_get_user_data(event));
         self._confirm_guide();
     }, LV_EVENT_CLICKED, this);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include "apps/db_base_app.hpp"
 #include "services/wifi_time_service.hpp"
@@ -12,6 +13,7 @@ public:
     using TimeChangedCb = std::function<void()>;
 
     explicit SettingsApp(TimeChangedCb on_time_changed = nullptr, std::function<void()> open_power = {});
+    void setLaunchDirectTime(bool direct);
     bool handleButtonGuide(ButtonEvent event);
     ~SettingsApp() override = default;
 
@@ -55,6 +57,7 @@ private:
     void buildQrPage(lv_obj_t *parent);
     void buildScanPage(lv_obj_t *parent);
     void buildPasswordPage(lv_obj_t *parent);
+    void refreshPasswordStatus();
     void fillScanList(const WifiTimeStatus &status);
     void buildTabAbout(lv_obj_t *parent);
     void refreshActiveTab();
@@ -85,6 +88,8 @@ private:
     TimeChangedCb _on_time_changed;
     std::function<void()> _open_power;
     ButtonGuide _button_guide;
+    std::atomic<bool> _launch_direct_time{false};
+    bool _direct_time_mode = false;
     bool _in_hub = true;
     bool _in_button_guide = false;
     Tab _active_tab = Tab::DISPLAY;

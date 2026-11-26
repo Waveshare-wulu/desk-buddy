@@ -1,6 +1,8 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
+#include <functional>
 #include "apps/db_base_app.hpp"
 #include "db_time_logic.hpp"
 
@@ -10,8 +12,10 @@ struct DateTime;
 
 class TimeToolsApp : public DeskBuddyApp {
 public:
-    explicit TimeToolsApp(std::function<void()> on_shift_changed = {});
+    explicit TimeToolsApp(std::function<void()> on_shift_changed = {},
+                          std::function<void()> on_open_time_calibration = {});
     ~TimeToolsApp() override = default;
+    void setRestoreViewAfterCalibration(bool restore);
 
 protected:
     bool run(void) override;
@@ -45,6 +49,7 @@ private:
     void stopRefreshTimer();
 
     static void onBackClicked(lv_event_t *e);
+    static void onTimeCalibrationClicked(lv_event_t *e);
     static void onHubCardClicked(lv_event_t *e);
     static void onRefreshTimer(lv_timer_t *t);
     static void onPomoStartPause(lv_event_t *e);
@@ -58,7 +63,9 @@ private:
 
     Page _page = Page::OFFWORK;
     bool _in_hub = true;
+    std::atomic<bool> _restore_view_after_calibration{false};
     std::function<void()> _on_shift_changed;
+    std::function<void()> _on_open_time_calibration;
     PomodoroTimer _pomo;
     bool _pomo_loaded = false;
     int _completion_date = 0;

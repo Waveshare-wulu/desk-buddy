@@ -132,6 +132,10 @@ bool runDisplayBenchmark(core::System &system, Desktop &desktop, lv_display_t *d
                 lv_display_add_event_cb(display, sampleDisplayRefresh, LV_EVENT_REFR_START, &probe);
                 lv_display_add_event_cb(display, sampleDisplayRefresh, LV_EVENT_FLUSH_START, &probe);
                 lv_display_add_event_cb(display, sampleDisplayRefresh, LV_EVENT_REFR_READY, &probe);
+                probe.scene = "full_screen";
+                lv_obj_invalidate(lv_display_get_screen_active(display));
+                lv_refr_now(display);
+                probe.scene = nullptr;
             }
         });
         if (!active) {

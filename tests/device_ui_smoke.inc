@@ -383,8 +383,9 @@ void runDeviceSmoke(core::System &system, Desktop &desktop, lv_display_t *displa
             }
             ++passed;
         }
-        ESP_LOGI(kSmokeTag, "ROUND %u passed=%u internal=%zu largest=%zu", round, passed,
-                 heap_caps_get_free_size(kInternalCaps), heap_caps_get_largest_free_block(kInternalCaps));
+        ESP_LOGI(kSmokeTag, "ROUND %u passed=%u internal=%zu largest=%zu psram=%zu", round, passed,
+                 heap_caps_get_free_size(kInternalCaps), heap_caps_get_largest_free_block(kInternalCaps),
+                 heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     }
 
     ESP_ERROR_CHECK(esp_lv_adapter_lock(-1));

@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <string>
+#include <utility>
 #include "db_fortune_engine.hpp"
 #include "esp_random.h"
 #include "services/clock_service.hpp"
@@ -12,8 +13,9 @@
 
 namespace desk_buddy {
 
-DailyFortuneApp::DailyFortuneApp()
+DailyFortuneApp::DailyFortuneApp(std::function<void()> on_open_time_calibration)
     : DeskBuddyApp("deskbuddy.daily_fortune", i18n::tr(i18n::StrId::APP_DAILY_FORTUNE), &db_icon_daily_fortune, 1)
+    , _on_open_time_calibration(std::move(on_open_time_calibration))
 {
 }
 
@@ -55,14 +57,17 @@ void DailyFortuneApp::buildUi()
     lv_obj_align(_warn_banner, LV_ALIGN_TOP_MID, 0, 56);
     lv_obj_set_style_bg_opa(_warn_banner, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(_warn_banner, theme::color(theme::kAccentAmberSoft), 0);
+    lv_obj_set_style_bg_color(_warn_banner, lv_color_darken(theme::color(theme::kAccentAmberSoft), 22), LV_STATE_PRESSED);
     lv_obj_set_style_border_width(_warn_banner, 1, 0);
     lv_obj_set_style_border_color(_warn_banner, theme::color(0xF2D3A0), 0);
     lv_obj_set_style_radius(_warn_banner, 12, 0);
     lv_obj_set_style_pad_all(_warn_banner, 0, 0);
     lv_obj_clear_flag(_warn_banner, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(_warn_banner, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(_warn_banner, onTimeCalibrationClicked, LV_EVENT_CLICKED, this);
 
     lv_obj_t *warn_lbl = lv_label_create(_warn_banner);
-    lv_label_set_text(warn_lbl, "时间未校准 · 当前为演示签，请在设置中校时");
+    lv_label_set_text(warn_lbl, "时间未校准 · 当前为演示签，轻点去校时 ›");
     lv_obj_set_style_text_font(warn_lbl, theme::fontSm(), 0);
     lv_obj_set_style_text_color(warn_lbl, theme::color(theme::kAccentAmberFg), 0);
     lv_obj_center(warn_lbl);
@@ -216,6 +221,14 @@ void DailyFortuneApp::renderFortune()
     lv_label_set_text(_yi_lbl, f.yi_text);
     lv_label_set_text(_ji_lbl, f.ji_text);
     lv_label_set_text(_quote_lbl, f.quote);
+}
+
+void DailyFortuneApp::onTimeCalibrationClicked(lv_event_t *e)
+{
+    auto *self = static_cast<DailyFortuneApp *>(lv_event_get_user_data(e));
+    if (!self || !self->_on_open_time_calibration) return;
+    SoundService::instance().play(SoundEffect::CLICK);
+    self->_on_open_time_calibration();
 }
 
 void DailyFortuneApp::onRerollDemo(lv_event_t *e)

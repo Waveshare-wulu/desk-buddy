@@ -38,7 +38,7 @@ struct WifiTimeStatus {
     int64_t last_sync_epoch = 0;
     TimeSyncSource last_sync_src = TimeSyncSource::NONE;
     uint32_t revision = 0;
-    std::array<WifiAccessPoint, 8> access_points{};
+    std::array<WifiAccessPoint, 24> access_points{};
     uint8_t access_point_count = 0;
 };
 

@@ -571,6 +571,11 @@ void SettingsApp::buildScanPage(lv_obj_t *parent)
     lv_obj_set_size(_scan_list, kContentWidth - 26, 246);
     lv_obj_add_flag(_scan_list, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scroll_dir(_scan_list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(_scan_list, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_style_width(_scan_list, 4, LV_PART_SCROLLBAR);
+    lv_obj_set_style_radius(_scan_list, LV_RADIUS_CIRCLE, LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_color(_scan_list, color(kTextMuted), LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_opa(_scan_list, LV_OPA_60, LV_PART_SCROLLBAR);
     lv_obj_set_flex_flow(_scan_list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(_scan_list, 6, 0);
 

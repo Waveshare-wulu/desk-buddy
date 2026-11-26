@@ -21,28 +21,32 @@ int wrapRtcField(int value, int min, int max)
 }
 
 constexpr const char *kLowerKeys[] = {
-    "q", "w", "e", "r", "t", "y", "u", "i", "o", "p", "\n",
-    "a", "s", "d", "f", "g", "h", "j", "k", "l", "\n",
-    "⇧", "z", "x", "c", "v", "b", "n", "m", "删除", "\n",
-    "123", "_", "-", ".", "@", "空格", "连接", ""
+    "a", "b", "c", "d", "e", "f", "g", "\n",
+    "h", "i", "j", "k", "l", "m", "n", "\n",
+    "o", "p", "q", "r", "s", "t", "u", "\n",
+    "⇧", "v", "w", "x", "y", "z", "删除", "\n",
+    "123", "符号", "空格", "连接", ""
 };
 constexpr const char *kUpperKeys[] = {
-    "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P", "\n",
-    "A", "S", "D", "F", "G", "H", "J", "K", "L", "\n",
-    "⇩", "Z", "X", "C", "V", "B", "N", "M", "删除", "\n",
-    "123", "_", "-", ".", "@", "空格", "连接", ""
+    "A", "B", "C", "D", "E", "F", "G", "\n",
+    "H", "I", "J", "K", "L", "M", "N", "\n",
+    "O", "P", "Q", "R", "S", "T", "U", "\n",
+    "⇩", "V", "W", "X", "Y", "Z", "删除", "\n",
+    "123", "符号", "空格", "连接", ""
 };
 constexpr const char *kNumberKeys[] = {
-    "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "\n",
-    "!", "@", "#", "$", "%", "^", "&", "*", "(", ")", "[", "]", "\n",
-    "-", "_", "+", "=", "/", "?", ".", ",", "<", ">", ":", ";", "\n",
-    "abc", "更多", "~", "删除", "空格", "连接", ""
+    "1", "2", "3", "4", "5", "\n",
+    "6", "7", "8", "9", "0", "\n",
+    ".", "-", "_", "@", "#", "!", "\n",
+    "+", "=", "/", "?", "*", "删除", "\n",
+    "abc", "符号", "空格", "连接", ""
 };
 constexpr const char *kSymbolKeys[] = {
-    "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "\n",
-    "{", "}", "\\", "|", "'", "\"", "`", "~", "\n",
-    "-", "_", "+", "=", "/", "?", ".", ",", "\n",
-    "abc", "123", "删除", "空格", "连接", ""
+    "!", "@", "#", "$", "%", "^", "&", "\n",
+    "*", "(", ")", "[", "]", "{", "}", "\n",
+    "<", ">", ":", ";", ",", "~", "`", "\n",
+    "\\", "|", "'", "\"", ".", "删除", "\n",
+    "abc", "123", "空格", "连接", ""
 };
 
 lv_obj_t *labelAt(lv_obj_t *parent, const char *text, int x, int y,
@@ -70,17 +74,34 @@ void setButton(lv_obj_t *button, const char *text)
 void useKeymap(lv_obj_t *keys, const char *const *map)
 {
     lv_buttonmatrix_set_map(keys, map);
-    lv_buttonmatrix_set_button_ctrl_all(keys, LV_BUTTONMATRIX_CTRL_NO_REPEAT);
     uint32_t index = 0;
     for (; *map && **map; ++map) {
         if (std::strcmp(*map, "\n") == 0) {
             continue;
         }
-        if (std::strcmp(*map, "连接") == 0) {
-            lv_buttonmatrix_set_button_ctrl(keys, index, LV_BUTTONMATRIX_CTRL_CUSTOM_1);
+        const std::string_view label(*map);
+        if (label == "连接") {
+            lv_buttonmatrix_set_button_ctrl(keys, index,
+                static_cast<lv_buttonmatrix_ctrl_t>(
+                    LV_BUTTONMATRIX_CTRL_CUSTOM_1 | LV_BUTTONMATRIX_CTRL_CLICK_TRIG | LV_BUTTONMATRIX_CTRL_NO_REPEAT));
+            lv_buttonmatrix_set_button_width(keys, index, 3);
+        } else if (label == "删除") {
+            lv_buttonmatrix_set_button_ctrl(keys, index, LV_BUTTONMATRIX_CTRL_CUSTOM_2);
             lv_buttonmatrix_set_button_width(keys, index, 2);
-        } else if (std::strcmp(*map, "空格") == 0) {
+        } else if (label == "123" || label == "abc" || label == "符号" || label == "空格") {
+            lv_buttonmatrix_set_button_ctrl(keys, index,
+                static_cast<lv_buttonmatrix_ctrl_t>(
+                    LV_BUTTONMATRIX_CTRL_CUSTOM_2 | LV_BUTTONMATRIX_CTRL_CLICK_TRIG | LV_BUTTONMATRIX_CTRL_NO_REPEAT));
             lv_buttonmatrix_set_button_width(keys, index, 2);
+        } else if (label == "⇧" || label == "⇩") {
+            lv_buttonmatrix_set_button_ctrl(keys, index,
+                static_cast<lv_buttonmatrix_ctrl_t>(
+                    LV_BUTTONMATRIX_CTRL_CUSTOM_2 | LV_BUTTONMATRIX_CTRL_CLICK_TRIG | LV_BUTTONMATRIX_CTRL_NO_REPEAT));
+            lv_buttonmatrix_set_button_width(keys, index, 1);
+        } else {
+            lv_buttonmatrix_set_button_ctrl(keys, index,
+                static_cast<lv_buttonmatrix_ctrl_t>(LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT));
+            lv_buttonmatrix_set_button_width(keys, index, 1);
         }
         ++index;
     }
@@ -227,7 +248,7 @@ void SettingsApp::showTimeView(TimeSubView view)
             break;
         case TimeSubView::KEYBOARD:
             top = createAppTopBar(_time_layer, _selected_network.ssid, kAccentCyanFg,
-                onTimeNavigate, this, "明文", onTogglePassword);
+                onTimeNavigate, this, "隐藏", onTogglePassword);
             back = TimeSubView::AP_LIST;
             back_text = "‹ 列表";
             buildPasswordPage(body);
@@ -598,56 +619,114 @@ void SettingsApp::fillScanList(const WifiTimeStatus &status)
 void SettingsApp::buildPasswordPage(lv_obj_t *parent)
 {
     _password = lv_textarea_create(parent);
-    lv_obj_set_size(_password, 356, 52);
-    lv_obj_set_pos(_password, kPadScreen, 8);
-    lv_obj_set_style_radius(_password, 16, 0);
-    lv_obj_set_style_border_color(_password, color(kBorderSubtle), 0);
-    lv_obj_set_style_pad_hor(_password, 14, 0);
-    lv_obj_set_style_pad_ver(_password, 11, 0);
-    lv_obj_set_style_text_font(_password, fontMd(), 0);
     lv_textarea_set_one_line(_password, true);
+    lv_obj_set_size(_password, 368, 52);
+    lv_obj_set_pos(_password, 12, 4);
+    lv_obj_set_style_radius(_password, 16, 0);
+    lv_obj_set_style_bg_color(_password, color(kBgCard), 0);
+    lv_obj_set_style_bg_opa(_password, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(_password, 2, 0);
+    lv_obj_set_style_border_color(_password, color(kAccentCyan), 0);
+    lv_obj_set_style_pad_hor(_password, 14, 0);
+    lv_obj_set_style_pad_ver(_password, 10, 0);
+    lv_obj_set_style_text_font(_password, fontMd(), 0);
+    lv_obj_set_style_text_color(_password, color(kTextPrimary), 0);
+    lv_obj_set_style_text_color(_password, color(kTextMuted), LV_PART_TEXTAREA_PLACEHOLDER);
+    lv_obj_set_style_border_color(_password, color(kAccentCyanFg), LV_PART_CURSOR);
+    lv_obj_set_style_border_width(_password, 2, LV_PART_CURSOR);
+    lv_obj_set_style_border_side(_password, LV_BORDER_SIDE_LEFT, LV_PART_CURSOR);
+    lv_obj_add_state(_password, LV_STATE_FOCUSED);
     lv_textarea_set_placeholder_text(_password, "请输入 Wi-Fi 密码");
-    lv_textarea_set_password_mode(_password, true);
     lv_textarea_set_password_bullet(_password, "•");
-    lv_textarea_set_password_show_time(_password, 0);
+    lv_textarea_set_password_show_time(_password, 800);
+    lv_textarea_set_password_mode(_password, false);
     lv_textarea_set_max_length(_password, 64);
 
     auto *clear = createPillButton(parent, "清空", kBgCardElevated, kTextPrimary, 80, 52);
-    lv_obj_set_pos(clear, 480 - kPadScreen - 80, 8);
+    lv_obj_set_pos(clear, 388, 4);
+    lv_obj_set_style_border_width(clear, 1, 0);
+    lv_obj_set_style_border_color(clear, color(kBorderSubtle), 0);
     lv_obj_add_event_cb(clear, [](lv_event_t *event) {
         auto *self = static_cast<SettingsApp *>(lv_event_get_user_data(event));
+        SoundService::instance().play(SoundEffect::CLICK);
         lv_textarea_set_text(self->_password, "");
-        lv_label_set_text(self->_password_msg, "复杂密码可以在手机上粘贴");
+        self->refreshPasswordStatus();
     }, LV_EVENT_CLICKED, this);
 
+    _password_msg = labelAt(parent, "", 16, 60, fontSm(), kTextSecondary);
+    refreshPasswordStatus();
+
     auto *keys = lv_buttonmatrix_create(parent);
-    lv_obj_set_size(keys, kContentWidth, 268);
-    lv_obj_set_pos(keys, kPadScreen, 70);
-    lv_obj_set_style_text_font(keys, fontSm(), LV_PART_ITEMS);
+    lv_obj_set_size(keys, 468, 284);
+    lv_obj_set_pos(keys, 6, 84);
+    lv_obj_set_style_text_font(keys, fontMd(), LV_PART_ITEMS);
     lv_obj_set_style_text_color(keys, color(kTextPrimary), LV_PART_ITEMS);
-    lv_obj_set_style_bg_color(keys, color(kBgCard), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(keys, color(kBgCanvas), LV_PART_ITEMS);
-    lv_obj_set_style_bg_color(keys, color(kBgCardPressed),
+    lv_obj_set_style_bg_color(keys, color(kBgCanvas), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(keys, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(keys, color(kBgCard), LV_PART_ITEMS);
+    lv_obj_set_style_bg_opa(keys, LV_OPA_COVER, LV_PART_ITEMS);
+    lv_obj_set_style_bg_color(keys, color(kAccentAmberSoft),
         static_cast<lv_style_selector_t>(LV_PART_ITEMS) | LV_STATE_PRESSED);
-    lv_obj_set_style_border_color(keys, color(kBorderSubtle), LV_PART_MAIN);
+    lv_obj_set_style_border_width(keys, 0, LV_PART_MAIN);
+    lv_obj_set_style_border_width(keys, 1, LV_PART_ITEMS);
     lv_obj_set_style_border_color(keys, color(kBorderSubtle), LV_PART_ITEMS);
-    lv_obj_set_style_pad_all(keys, 6, 0);
-    lv_obj_set_style_pad_row(keys, 6, 0);
+    lv_obj_set_style_border_color(keys, color(kAccentAmber),
+        static_cast<lv_style_selector_t>(LV_PART_ITEMS) | LV_STATE_PRESSED);
+    lv_obj_set_style_shadow_width(keys, 0, LV_PART_ITEMS);
+    lv_obj_set_style_pad_all(keys, 4, 0);
+    lv_obj_set_style_pad_row(keys, 5, 0);
     lv_obj_set_style_pad_column(keys, 4, 0);
     lv_obj_set_style_radius(keys, 16, LV_PART_MAIN);
-    lv_obj_set_style_radius(keys, 10, LV_PART_ITEMS);
+    lv_obj_set_style_radius(keys, 12, LV_PART_ITEMS);
     lv_obj_add_event_cb(keys, [](lv_event_t *event) {
         auto *task = lv_event_get_draw_task(event);
-        auto *rect = lv_draw_task_get_fill_dsc(task);
-        if (rect && rect->base.part == LV_PART_ITEMS &&
-            lv_buttonmatrix_has_button_ctrl(lv_event_get_target_obj(event), rect->base.id1, LV_BUTTONMATRIX_CTRL_CUSTOM_1)) {
-            rect->color = color(kAccentMintSoft);
+        auto *target = lv_event_get_target_obj(event);
+        auto *base = static_cast<lv_draw_dsc_base_t *>(lv_draw_task_get_draw_dsc(task));
+        if (!base || base->part != LV_PART_ITEMS) {
+            return;
+        }
+        const bool is_connect = lv_buttonmatrix_has_button_ctrl(target, base->id1, LV_BUTTONMATRIX_CTRL_CUSTOM_1);
+        const bool is_func = lv_buttonmatrix_has_button_ctrl(target, base->id1, LV_BUTTONMATRIX_CTRL_CUSTOM_2);
+        const bool is_pressed = lv_obj_has_state(target, LV_STATE_PRESSED) &&
+            lv_buttonmatrix_get_selected_button(target) == base->id1;
+        if (auto *rect = lv_draw_task_get_fill_dsc(task)) {
+            if (is_connect) {
+                rect->color = color(is_pressed ? kAccentMint : kAccentMintFg);
+            } else if (is_func && !is_pressed) {
+                rect->color = color(kBgCardElevated);
+            }
+        } else if (auto *border = lv_draw_task_get_border_dsc(task)) {
+            if (is_connect) {
+                border->color = color(kAccentMintFg);
+            }
+        } else if (auto *label = lv_draw_task_get_label_dsc(task)) {
+            if (is_connect) {
+                label->color = color(kTextOnAccent);
+            }
         }
     }, LV_EVENT_DRAW_TASK_ADDED, nullptr);
     lv_obj_add_flag(keys, LV_OBJ_FLAG_SEND_DRAW_TASK_EVENTS);
     useKeymap(keys, kLowerKeys);
     lv_obj_add_event_cb(keys, onPasswordKey, LV_EVENT_VALUE_CHANGED, this);
-    _password_msg = labelAt(parent, "复杂密码可以在手机上粘贴", kPadScreen, 345, fontSm(), kTextSecondary);
+}
+
+void SettingsApp::refreshPasswordStatus()
+{
+    if (!_password || !_password_msg) {
+        return;
+    }
+    const size_t len = std::strlen(lv_textarea_get_text(_password));
+    if (len == 0) {
+        lv_label_set_text(_password_msg, "已输入 0 位 · 密码需 8 位以上");
+        lv_obj_set_style_text_color(_password_msg, color(kTextSecondary), 0);
+    } else if (len < 8) {
+        lv_label_set_text_fmt(_password_msg, "已输入 %u 位 · 还需 %u 位",
+                              static_cast<unsigned>(len), static_cast<unsigned>(8 - len));
+        lv_obj_set_style_text_color(_password_msg, color(kAccentAmberFg), 0);
+    } else {
+        lv_label_set_text_fmt(_password_msg, "已输入 %u 位 · 可以连接", static_cast<unsigned>(len));
+        lv_obj_set_style_text_color(_password_msg, color(kAccentMintFg), 0);
+    }
 }
 
 void SettingsApp::onWifiPrimary(lv_event_t *e)
@@ -731,11 +810,13 @@ void SettingsApp::onPasswordKey(lv_event_t *e)
     if (!text) {
         return;
     }
+    SoundService::instance().play(SoundEffect::CLICK);
     const std::string_view key(text);
     if (key == "连接") {
         const auto *password = lv_textarea_get_text(self->_password);
         if (!password[0]) {
             lv_label_set_text(self->_password_msg, "请输入 Wi-Fi 密码");
+            lv_obj_set_style_text_color(self->_password_msg, color(kAccentCoralFg), 0);
             return;
         }
         if (WifiTimeService::instance().connectAndSync(self->_selected_network.ssid,
@@ -747,6 +828,7 @@ void SettingsApp::onPasswordKey(lv_event_t *e)
                 self->showTimeView(TimeSubView::MAIN);
             } else {
                 lv_label_set_text(self->_password_msg, "密码需 8 至 63 字符或 64 位十六进制密钥");
+                lv_obj_set_style_text_color(self->_password_msg, color(kAccentCoralFg), 0);
             }
         }
     } else if (key == "⇧") {
@@ -755,21 +837,24 @@ void SettingsApp::onPasswordKey(lv_event_t *e)
         useKeymap(keys, kLowerKeys);
     } else if (key == "123") {
         useKeymap(keys, kNumberKeys);
-    } else if (key == "更多") {
+    } else if (key == "符号") {
         useKeymap(keys, kSymbolKeys);
     } else if (key == "删除") {
         lv_textarea_delete_char(self->_password);
+        self->refreshPasswordStatus();
     } else {
         lv_textarea_add_text(self->_password, key == "空格" ? " " : text);
+        self->refreshPasswordStatus();
     }
 }
 
 void SettingsApp::onTogglePassword(lv_event_t *e)
 {
     auto *self = static_cast<SettingsApp *>(lv_event_get_user_data(e));
+    SoundService::instance().play(SoundEffect::CLICK);
     const bool was_hidden = lv_textarea_get_password_mode(self->_password);
     lv_textarea_set_password_mode(self->_password, !was_hidden);
-    setButton(lv_event_get_target_obj(e), was_hidden ? "隐藏" : "明文");
+    setButton(lv_event_get_current_target_obj(e), was_hidden ? "隐藏" : "显示");
 }
 
 }

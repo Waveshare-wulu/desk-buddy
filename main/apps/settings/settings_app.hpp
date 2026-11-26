@@ -57,6 +57,7 @@ private:
     void buildQrPage(lv_obj_t *parent);
     void buildScanPage(lv_obj_t *parent);
     void buildPasswordPage(lv_obj_t *parent);
+    void refreshPasswordStatus();
     void fillScanList(const WifiTimeStatus &status);
     void buildTabAbout(lv_obj_t *parent);
     void refreshActiveTab();

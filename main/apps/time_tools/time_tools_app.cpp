@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 #include <iterator>
+#include <utility>
 #include "esp_timer.h"
 #include "services/clock_service.hpp"
 #include "services/sound_service.hpp"
@@ -106,11 +107,18 @@ uint64_t nowMs()
 }
 }
 
-TimeToolsApp::TimeToolsApp(std::function<void()> on_shift_changed)
+TimeToolsApp::TimeToolsApp(std::function<void()> on_shift_changed,
+                           std::function<void()> on_open_time_calibration)
     : DeskBuddyApp("deskbuddy.time_tools", i18n::tr(i18n::StrId::APP_TIME_TOOLS), &db_icon_time_tools, 1)
     , _on_shift_changed(std::move(on_shift_changed))
+    , _on_open_time_calibration(std::move(on_open_time_calibration))
     , _pomo(25 * 60)
 {
+}
+
+void TimeToolsApp::setRestoreViewAfterCalibration(bool restore)
+{
+    _restore_view_after_calibration.store(restore);
 }
 
 bool TimeToolsApp::run(void)
@@ -120,6 +128,11 @@ bool TimeToolsApp::run(void)
         _pomo_loaded = true;
     }
     buildUi();
+    if (_restore_view_after_calibration.exchange(false) && !_in_hub) {
+        showPage(_page);
+    } else {
+        showHub();
+    }
     _refresh_timer = lv_timer_create(onRefreshTimer, 250, this);
     return true;
 }
@@ -162,15 +175,19 @@ void TimeToolsApp::buildUi()
     const auto top = createAppTopBar(root, "", kAccentCyanFg, onBackClicked, this);
     _back_label = lv_obj_get_child(top.back_btn, 0);
     _title_label = top.title_label;
-    _rtc_badge = addBadge(top.bar, "待校时", kAccentAmberSoft, kAccentAmberFg);
+    _rtc_badge = createBadge(top.bar, "待校时 ›", kAccentAmberSoft, kAccentAmberFg);
     lv_obj_align(_rtc_badge, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_add_flag(_rtc_badge, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(_rtc_badge, lv_color_darken(color(kAccentAmberSoft), 22), LV_STATE_PRESSED);
+    lv_obj_add_event_cb(_rtc_badge, onTimeCalibrationClicked, LV_EVENT_CLICKED, this);
+    lv_obj_update_layout(_rtc_badge);
+    expandTouchHeight(_rtc_badge, lv_obj_get_height(_rtc_badge));
 
     _content_box = lv_obj_create(root);
     lv_obj_remove_style_all(_content_box);
     lv_obj_set_size(_content_box, LV_PCT(100), 366);
     lv_obj_set_pos(_content_box, 0, kTopBarHeight + 2);
     lv_obj_clear_flag(_content_box, static_cast<lv_obj_flag_t>(LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE));
-    showHub();
 }
 
 void TimeToolsApp::clearContent()
@@ -671,6 +688,14 @@ void TimeToolsApp::onBackClicked(lv_event_t *e)
     } else {
         DeskBuddyApp::onBackBtnClicked(e);
     }
+}
+
+void TimeToolsApp::onTimeCalibrationClicked(lv_event_t *e)
+{
+    auto *self = static_cast<TimeToolsApp *>(lv_event_get_user_data(e));
+    if (!self || !self->_on_open_time_calibration) return;
+    SoundService::instance().play(SoundEffect::CLICK);
+    self->_on_open_time_calibration();
 }
 
 void TimeToolsApp::onHubCardClicked(lv_event_t *e)

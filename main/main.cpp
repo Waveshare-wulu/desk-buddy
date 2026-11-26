@@ -1,6 +1,7 @@
 #include <array>
 #include <cstdlib>
 #include <memory>
+#include <utility>
 
 #include "brookesia/system_core/system.hpp"
 #include "bsp/esp-bsp.h"
@@ -46,10 +47,13 @@ namespace {
 constexpr const char *TAG = "DeskBuddy";
 constexpr uint32_t kShakeDispatchPeriodMs = 50;
 constexpr size_t kWoodenFish = 1;
+constexpr size_t kDailyFortune = 2;
+constexpr size_t kTimeTools = 5;
 constexpr size_t kSettings = 6;
 
 enum class SystemAction : uint8_t {
-    START_APP, STOP_APP, SHUTDOWN, REBOOT, TOGGLE_SCREEN, OPEN_POWER_MENU, TOGGLE_MUTE, MARK_BUTTON_GUIDE_SEEN,
+    START_APP, STOP_APP, OPEN_SETTINGS, OPEN_TIME_CALIBRATION,
+    SHUTDOWN, REBOOT, TOGGLE_SCREEN, OPEN_POWER_MENU, TOGGLE_MUTE, MARK_BUTTON_GUIDE_SEEN,
 };
 
 struct SystemCommand {
@@ -210,12 +214,8 @@ void dispatchButton(SystemUi &ui, QueueHandle_t queue, const auto &apps, const a
             apps[active]->onUserButtonPressed();
         }
     } else if (active != kSettings) {
-        if (active < apps.size()) {
-            if (uxQueueSpacesAvailable(queue) < 2 || !queueSystemCommand(queue, {SystemAction::STOP_APP, ids[active]})) {
-                return;
-            }
-        }
-        queueSystemCommand(queue, {SystemAction::START_APP, ids[kSettings]});
+        const auto active_id = active < apps.size() ? ids[active] : core::INVALID_APP_ID;
+        queueSystemCommand(queue, {SystemAction::OPEN_SETTINGS, active_id});
     }
 }
 
@@ -318,15 +318,29 @@ extern "C" void app_main(void)
         return;
     }
 
+    const auto queue = xQueueCreate(4, sizeof(SystemCommand));
+    if (!queue) {
+        ESP_LOGE(TAG, "Unable to allocate app command queue");
+        return;
+    }
+
     SystemUi ui;
-    const std::array<std::shared_ptr<DeskBuddyApp>, 7> apps = {
+    std::array<core::AppId, 7> ids{};
+    const auto open_time_calibration = [queue](core::AppId source_id) {
+        queueSystemCommand(queue, {SystemAction::OPEN_TIME_CALIBRATION, source_id});
+    };
+    const std::array<std::shared_ptr<DeskBuddyApp>, ids.size()> apps = {
         std::make_shared<RandomLabApp>(),
         std::make_shared<WoodenFishApp>(),
-        std::make_shared<DailyFortuneApp>(),
+        std::make_shared<DailyFortuneApp>([&ids, open_time_calibration]() {
+            open_time_calibration(ids[kDailyFortune]);
+        }),
         std::make_shared<Game2048App>(),
         std::make_shared<RelativeCalcApp>(),
         std::make_shared<TimeToolsApp>([&ui]() {
             ui.desktop.homeHeader().refreshClockAndStats();
+        }, [&ids, open_time_calibration]() {
+            open_time_calibration(ids[kTimeTools]);
         }),
         std::make_shared<SettingsApp>([&ui]() {
             ui.desktop.homeHeader().refreshDailyContent();
@@ -335,21 +349,16 @@ extern "C" void app_main(void)
             ui.power_overlay.showMenu(PowerService::instance().getBatteryStatus());
         }),
     };
-    std::array<core::AppId, apps.size()> ids{};
     for (size_t index = 0; index < apps.size(); ++index) {
         const auto installed = system.install_app(apps[index]);
         if (!installed) {
             ESP_LOGE(TAG, "Unable to install %s: %s", apps[index]->name(), installed.error().c_str());
+            vQueueDelete(queue);
             return;
         }
         ids[index] = *installed;
     }
 
-    const auto queue = xQueueCreate(4, sizeof(SystemCommand));
-    if (!queue) {
-        ESP_LOGE(TAG, "Unable to allocate app command queue");
-        return;
-    }
     const auto launch = [queue](core::AppId id) { queueSystemCommand(queue, {SystemAction::START_APP, id}); };
     ESP_ERROR_CHECK(esp_lv_adapter_lock(-1));
     ui.power_overlay.bind([&ui, queue](bool reboot) {
@@ -365,9 +374,9 @@ extern "C" void app_main(void)
         ui.desktop.addApp(id, app->launcherPage(), app->name(), app->icon());
     }
     ui.desktop.showHome({
-        .open_time = [launch, id = ids[5]]() { launch(id); },
-        .open_fortune = [launch, id = ids[2]]() { launch(id); },
-        .open_settings = [launch, id = ids[kSettings]]() { launch(id); },
+        .open_time = [launch, id = ids[kTimeTools]]() { launch(id); },
+        .open_fortune = [launch, id = ids[kDailyFortune]]() { launch(id); },
+        .open_time_calibration = [open_time_calibration]() { open_time_calibration(core::INVALID_APP_ID); },
     });
     ui.desktop.refreshStatus(ClockService::instance().getNow(), power.getBatteryStatus());
     lv_timer_create(onSystemTick, 500, &ui);
@@ -404,6 +413,22 @@ extern "C" void app_main(void)
     }
 #endif
 
+    const auto settings_id = ids[kSettings];
+    auto &settings_app = static_cast<SettingsApp &>(*apps[kSettings]);
+    auto &time_tools_app = static_cast<TimeToolsApp &>(*apps[kTimeTools]);
+    const auto reopen_after_calibration = [&](core::AppId id) {
+        if (id == core::INVALID_APP_ID) {
+            return;
+        }
+        const bool restore_time_tools = id == ids[kTimeTools];
+        if (restore_time_tools) {
+            time_tools_app.setRestoreViewAfterCalibration(true);
+        }
+        if (!applyAppCommand(system, {SystemAction::START_APP, id}) && restore_time_tools) {
+            time_tools_app.setRestoreViewAfterCalibration(false);
+        }
+    };
+    core::AppId return_app_id = core::INVALID_APP_ID;
     SystemCommand command{};
     for (;;) {
         if (xQueueReceive(queue, &command, portMAX_DELAY) != pdTRUE) {
@@ -411,11 +436,42 @@ extern "C" void app_main(void)
         }
         switch (command.action) {
             case SystemAction::START_APP:
-            case SystemAction::STOP_APP:
-                applyAppCommand(system, command);
+                if (applyAppCommand(system, command)) {
+                    return_app_id = core::INVALID_APP_ID;
+                }
                 break;
+            case SystemAction::STOP_APP:
+                if (applyAppCommand(system, command) && command.id == settings_id) {
+                    reopen_after_calibration(std::exchange(return_app_id, core::INVALID_APP_ID));
+                }
+                break;
+            case SystemAction::OPEN_SETTINGS:
+            case SystemAction::OPEN_TIME_CALIBRATION: {
+                const bool direct_time = command.action == SystemAction::OPEN_TIME_CALIBRATION;
+                const auto active = system.get_active_app();
+                const auto active_id = active ? active->app_id : core::INVALID_APP_ID;
+                const bool source_changed = active_id != command.id;
+                if (active_id == settings_id || (source_changed && (direct_time || active))) {
+                    break;
+                }
+                if (active && !applyAppCommand(system, {SystemAction::STOP_APP, active_id})) {
+                    break;
+                }
+                return_app_id = core::INVALID_APP_ID;
+                settings_app.setLaunchDirectTime(direct_time);
+                if (applyAppCommand(system, {SystemAction::START_APP, settings_id})) {
+                    if (direct_time) {
+                        return_app_id = active_id;
+                    }
+                } else if (direct_time) {
+                    settings_app.setLaunchDirectTime(false);
+                    reopen_after_calibration(active_id);
+                }
+                break;
+            }
             case SystemAction::SHUTDOWN:
             case SystemAction::REBOOT:
+                return_app_id = core::INVALID_APP_ID;
                 runPowerCommand(system, ui, command.action);
                 break;
             case SystemAction::TOGGLE_SCREEN:

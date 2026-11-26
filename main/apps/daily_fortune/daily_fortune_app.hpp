@@ -1,13 +1,14 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include "apps/db_base_app.hpp"
 
 namespace desk_buddy {
 
 class DailyFortuneApp : public DeskBuddyApp {
 public:
-    DailyFortuneApp();
+    explicit DailyFortuneApp(std::function<void()> on_open_time_calibration = {});
     ~DailyFortuneApp() override = default;
 
 protected:
@@ -18,6 +19,9 @@ private:
     void buildUi();
     void renderFortune();
     static void onRerollDemo(lv_event_t *e);
+    static void onTimeCalibrationClicked(lv_event_t *e);
+
+    std::function<void()> _on_open_time_calibration;
 
     uint32_t _demo_seed = 20261120u;
     lv_obj_t *_warn_banner = nullptr;

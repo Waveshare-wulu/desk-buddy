@@ -190,10 +190,20 @@ SettingsApp::SettingsApp(TimeChangedCb on_time_changed, std::function<void()> op
 {
 }
 
+void SettingsApp::setLaunchDirectTime(bool direct)
+{
+    _launch_direct_time.store(direct);
+}
+
 bool SettingsApp::run(void)
 {
+    _direct_time_mode = _launch_direct_time.exchange(false);
     buildUi();
-    showHub();
+    if (_direct_time_mode) {
+        showTab(Tab::TIME);
+    } else {
+        showHub();
+    }
     return true;
 }
 
@@ -220,6 +230,8 @@ bool SettingsApp::pause(void)
 
 bool SettingsApp::close(void)
 {
+    _launch_direct_time.store(false);
+    _direct_time_mode = false;
     _button_guide.clear();
     stopHubRefresh();
     stopTimePolling();
@@ -350,7 +362,7 @@ void SettingsApp::showTab(Tab tab)
     _reset_armed = false;
 
     const auto &page = kPages[static_cast<int>(tab)];
-    lv_label_set_text_static(lv_obj_get_child(_back_btn, 0), "‹ 设置");
+    lv_label_set_text_static(lv_obj_get_child(_back_btn, 0), _direct_time_mode ? "‹ 返回" : "‹ 设置");
     lv_label_set_text_static(_title_lbl, page.title);
     updateTopAction(tab == Tab::ABOUT ? "按键" : nullptr, kAccentMintFg);
 
@@ -657,6 +669,8 @@ bool SettingsApp::onBackButtonPressed()
             case TimeSubView::AP_LIST:    showTimeView(TimeSubView::QR_PORTAL); break;
             default:                     showTimeView(TimeSubView::MAIN); break;
         }
+    } else if (_direct_time_mode) {
+        return false;
     } else {
         showHub();
     }

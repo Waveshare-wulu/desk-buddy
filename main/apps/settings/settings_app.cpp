@@ -23,7 +23,7 @@ constexpr int kSide = kPadScreen;
 constexpr int kCardWidth = kContentWidth;
 constexpr int kGridWidth = kColumnWidth;
 constexpr int kGridGap = kCardGap;
-constexpr const char *kVersion = "v1.0.0";
+constexpr const char *kVersion = "v1.0.1";
 
 struct PageStyle {
     const char *title;
